@@ -1,0 +1,309 @@
+-- LocalScript → StarterPlayer → StarterPlayerScripts
+-- Final combined: smooth assist + large hitboxes + keybind GUI + notifications + key system + jump delay removal + external snippets
+
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local HttpService = game:GetService("HttpService")
+
+-- SETTINGS
+local MAX_DISTANCE = 250
+local SMOOTHNESS = 0.1
+local TEAM_CHECK = true
+local HEAD_NAME = "Head"
+local HITBOX_SIZE_MULTIPLIER = Vector3.new(4, 4, 4)
+local HITBOX_TRANSPARENCY = 0.99
+local TOGGLE_KEY = Enum.KeyCode.R
+local CORRECT_KEY = "Seizure123" -- 🔑 change this key
+
+-- INTERNALS
+local aimLockEnabled = false
+local currentTargetHead = nil
+local connection = nil
+local originalSize = nil
+local originalTransparency = nil
+local keyVerified = false
+
+-- REMOVE JUMP DELAY
+local function removeJumpDelay(char)
+	local humanoid = char:WaitForChild("Humanoid", 5)
+	if humanoid then
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+		humanoid.UseJumpPower = true
+		pcall(function()
+			humanoid.JumpCooldown = 0
+		end)
+	end
+end
+if LocalPlayer.Character then removeJumpDelay(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(removeJumpDelay)
+
+-- NOTIFICATION SYSTEM
+local function createNotification(text, duration)
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	duration = duration or 6
+	local screenGui = Instance.new("ScreenGui", playerGui)
+	screenGui.Name = "AimLockNotification"
+	local label = Instance.new("TextLabel", screenGui)
+	label.AnchorPoint = Vector2.new(0.5, 1)
+	label.Position = UDim2.new(0.5, 0, 1, -150) -- 🔼 higher position
+	label.Size = UDim2.new(0.8, 0, 0, 40)
+	label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	label.BackgroundTransparency = 0.5
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 18
+	label.Text = text
+	label.TextWrapped = true
+	task.spawn(function()
+		wait(duration)
+		for i = 1, 20 do
+			label.TextTransparency = i * 0.05
+			label.BackgroundTransparency = 0.5 + (i * 0.025)
+			wait(0.05)
+		end
+		screenGui:Destroy()
+	end)
+end
+
+-- TARGETING
+local function isValidTarget(char)
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	local head = char and char:FindFirstChild(HEAD_NAME)
+	return humanoid and humanoid.Health > 0 and head
+end
+local function isTeammate(player)
+	if not TEAM_CHECK then return false end
+	return LocalPlayer.Team and player.Team and LocalPlayer.Team == player.Team
+end
+local function findNearestHead()
+	local camPos = Camera.CFrame.Position
+	local nearestHead, nearestDist = nil, MAX_DISTANCE + 1
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and isValidTarget(player.Character) and not isTeammate(player) then
+			local head = player.Character:FindFirstChild(HEAD_NAME)
+			if head then
+				local dist = (head.Position - camPos).Magnitude
+				if dist < nearestDist then
+					nearestDist = dist
+					nearestHead = head
+				end
+			end
+		end
+	end
+	return nearestHead
+end
+
+-- HITBOX
+local function extendHitbox(head)
+	if not head or not head:IsA("BasePart") then return end
+	if not originalSize then
+		originalSize = head.Size
+		originalTransparency = head.Transparency
+	end
+	pcall(function()
+		head.Size = originalSize * HITBOX_SIZE_MULTIPLIER
+		head.Transparency = HITBOX_TRANSPARENCY
+		head.Massless = true
+		head.CanCollide = false
+	end)
+end
+local function resetHitbox(head)
+	if not head or not head:IsA("BasePart") then return end
+	pcall(function()
+		if originalSize then head.Size = originalSize end
+		if originalTransparency then head.Transparency = originalTransparency end
+		head.Massless = false
+		head.CanCollide = true
+	end)
+	originalSize, originalTransparency = nil, nil
+end
+
+-- AIM ASSIST
+local function onRenderStep()
+	if not aimLockEnabled then return end
+	if not currentTargetHead or not currentTargetHead.Parent or not isValidTarget(currentTargetHead.Parent) then
+		if currentTargetHead then resetHitbox(currentTargetHead) end
+		currentTargetHead = findNearestHead()
+		if not currentTargetHead then
+			aimLockEnabled = false
+			if connection then connection:Disconnect() connection = nil end
+			return
+		end
+		extendHitbox(currentTargetHead)
+	end
+	local targetPos, camPos = currentTargetHead.Position, Camera.CFrame.Position
+	local dir = (targetPos - camPos)
+	if dir.Magnitude == 0 then return end
+	dir = dir.Unit
+	local newLook = Camera.CFrame.LookVector:Lerp(dir, math.clamp(SMOOTHNESS, 0, 1))
+	Camera.CFrame = CFrame.new(camPos, camPos + newLook)
+end
+
+-- TOGGLE
+local function toggleAimLock()
+	aimLockEnabled = not aimLockEnabled
+	if aimLockEnabled then
+		currentTargetHead = findNearestHead()
+		if currentTargetHead then
+			extendHitbox(currentTargetHead)
+			if not connection then connection = RunService.RenderStepped:Connect(onRenderStep) end
+			createNotification("Aimlock Enabled", 3)
+		else
+			aimLockEnabled = false
+			createNotification("No valid target found.", 3)
+		end
+	else
+		if connection then connection:Disconnect() connection = nil end
+		if currentTargetHead then resetHitbox(currentTargetHead) currentTargetHead = nil end
+		createNotification("Aimlock Disabled", 3)
+	end
+end
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == TOGGLE_KEY then
+		toggleAimLock()
+	end
+end)
+LocalPlayer.CharacterRemoving:Connect(function()
+	aimLockEnabled = false
+	if connection then connection:Disconnect() connection = nil end
+	if currentTargetHead then resetHitbox(currentTargetHead) currentTargetHead = nil end
+end)
+
+-- GUI: KEYBIND SELECTOR
+local function createKeybindSelector()
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	local screenGui = Instance.new("ScreenGui", playerGui)
+	screenGui.Name = "AimLockKeySelector"
+	screenGui.ResetOnSpawn = false
+	local frame = Instance.new("Frame", screenGui)
+	frame.Size = UDim2.new(0, 300, 0, 150)
+	frame.Position = UDim2.new(0.5, -150, 0.5, -75)
+	frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	frame.BorderSizePixel = 0
+	local title = Instance.new("TextLabel", frame)
+	title.Text = "Credits to Seizure"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 20
+	title.Size = UDim2.new(1, 0, 0, 40)
+	title.TextColor3 = Color3.new(1, 1, 1)
+	title.BackgroundTransparency = 1
+	local prompt = Instance.new("TextLabel", frame)
+	prompt.Text = "Enter your AimLock key (A-Z):"
+	prompt.Font = Enum.Font.Gotham
+	prompt.TextSize = 16
+	prompt.Position = UDim2.new(0, 0, 0, 50)
+	prompt.Size = UDim2.new(1, 0, 0, 30)
+	prompt.TextColor3 = Color3.fromRGB(220, 220, 220)
+	prompt.BackgroundTransparency = 1
+	local textBox = Instance.new("TextBox", frame)
+	textBox.PlaceholderText = "Type a key like R or Q"
+	textBox.Font = Enum.Font.Gotham
+	textBox.TextSize = 16
+	textBox.Position = UDim2.new(0.1, 0, 0.6, 0)
+	textBox.Size = UDim2.new(0.8, 0, 0, 30)
+	textBox.Text = ""
+	textBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	textBox.TextColor3 = Color3.new(1, 1, 1)
+	textBox.ClearTextOnFocus = false
+	textBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			local text = tostring(textBox.Text or ""):upper()
+			if #text == 1 and text:match("%a") then
+				TOGGLE_KEY = Enum.KeyCode[text]
+				createNotification("Aimlock toggle key set to [" .. text .. "]", 5)
+				createNotification("Good Boy!", 3)
+				screenGui:Destroy()
+			else
+				textBox.Text = ""
+				textBox.PlaceholderText = "Invalid key! Try again."
+			end
+		end
+	end)
+end
+
+-- 🔑 KEY SYSTEM
+local function createKeySystem(callback)
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	local screenGui = Instance.new("ScreenGui", playerGui)
+	screenGui.Name = "KeySystem"
+	screenGui.ResetOnSpawn = false
+	local frame = Instance.new("Frame", screenGui)
+	frame.Size = UDim2.new(0, 400, 0, 200)
+	frame.Position = UDim2.new(0.5, -200, 0.5, -100)
+	frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	frame.BorderSizePixel = 0
+	local title = Instance.new("TextLabel", frame)
+	title.Text = "Made By Seizure"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 22
+	title.Size = UDim2.new(1, 0, 0, 40)
+	title.TextColor3 = Color3.new(1, 1, 1)
+	title.BackgroundTransparency = 1
+	local prompt = Instance.new("TextLabel", frame)
+	prompt.Text = "Enter Key to Unlock:"
+	prompt.Font = Enum.Font.Gotham
+	prompt.TextSize = 18
+	prompt.Position = UDim2.new(0, 0, 0, 50)
+	prompt.Size = UDim2.new(1, 0, 0, 30)
+	prompt.TextColor3 = Color3.fromRGB(220, 220, 220)
+	prompt.BackgroundTransparency = 1
+	local textBox = Instance.new("TextBox", frame)
+	textBox.PlaceholderText = "Enter your key here"
+	textBox.Font = Enum.Font.Gotham
+	textBox.TextSize = 16
+	textBox.Position = UDim2.new(0.1, 0, 0.45, 0)
+	textBox.Size = UDim2.new(0.8, 0, 0, 30)
+	textBox.Text = ""
+	textBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	textBox.TextColor3 = Color3.new(1, 1, 1)
+	textBox.ClearTextOnFocus = false
+	local confirmBtn = Instance.new("TextButton", frame)
+	confirmBtn.Text = "Confirm"
+	confirmBtn.Font = Enum.Font.GothamBold
+	confirmBtn.TextSize = 16
+	confirmBtn.Size = UDim2.new(0.4, 0, 0, 30)
+	confirmBtn.Position = UDim2.new(0.3, 0, 0.7, 0)
+	confirmBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	confirmBtn.TextColor3 = Color3.new(1, 1, 1)
+	confirmBtn.MouseButton1Click:Connect(function()
+		local inputKey = tostring(textBox.Text or "")
+		if inputKey == CORRECT_KEY then
+			keyVerified = true
+			screenGui:Destroy()
+			if callback then callback() end
+		else
+			LocalPlayer:Kick("Invalid Key. Please get the correct key from Seizure.")
+		end
+	end)
+end
+
+-- STARTUP
+createKeySystem(function()
+	createNotification("Credits to Seizure. Default key is [R] unless changed.", 6)
+	createKeybindSelector()
+
+	-- 📦 EXTERNAL SNIPPETS
+	pcall(function()
+		local AkaliNotif = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/Dynissimo/main/Scripts/AkaliNotif.lua"))();
+		if AkaliNotif and type(AkaliNotif.Notify) == "function" then
+			AkaliNotif.Notify({
+				Description = "Thanks to Seizure for making this.";
+				Title = "(thatsei) on Discord.";
+				Duration = 15;
+			})
+		end
+	end)
+
+	pcall(function()
+		getgenv().Speed = true
+		getgenv().FakeMacro = true
+	end)
+
+	pcall(function()
+		loadstring(game:HttpGet("https://raw.githubusercontent.com/Allvideo/nukermode/main/Kit%20tools.txt"))()
+	end)
+end)
