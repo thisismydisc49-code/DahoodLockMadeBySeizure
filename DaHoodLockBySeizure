@@ -16,7 +16,7 @@ local HEAD_NAME = "Head"
 local HITBOX_SIZE_MULTIPLIER = Vector3.new(4, 4, 4)
 local HITBOX_TRANSPARENCY = 0.99
 local TOGGLE_KEY = Enum.KeyCode.R
-local CORRECT_KEY = "Seizure123" -- 🔑 change this key
+local CORRECT_KEY = "Qb4b523wd9" -- 🔑 change this key
 
 -- INTERNALS
 local aimLockEnabled = false
