@@ -10,7 +10,7 @@ local HttpService = game:GetService("HttpService")
 
 -- SETTINGS
 local MAX_DISTANCE = 250
-local SMOOTHNESS = 0.1
+local SMOOTHNESS = 0.0
 local TEAM_CHECK = true
 local HEAD_NAME = "Head"
 local HITBOX_SIZE_MULTIPLIER = Vector3.new(4, 4, 4)
